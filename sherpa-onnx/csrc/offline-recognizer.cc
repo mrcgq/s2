@@ -17,6 +17,7 @@
 #include "rawfile/raw_file_manager.h"
 #endif
 
+#include "sherpa-onnx/csrc/dsp-radar.h"  // [Version 31] 香农熵后卫熔断中枢
 #include "sherpa-onnx/csrc/file-utils.h"
 #include "sherpa-onnx/csrc/macros.h"
 #include "sherpa-onnx/csrc/offline-lm-config.h"
@@ -176,6 +177,10 @@ void OfflineRecognizer::DecodeStreams(OfflineStream **ss, int32_t n) const {
   for (int32_t i = 0; i < n; ++i) {
     auto r = ss[i]->GetResult();
     r.text = RemoveLeadingSpaces(r.text);
+
+    // ──【Version 31 后卫注入点 C：信息论香农熵熔断与死循环处决】──
+    r.text = ApplyEntropyAndLoopBreaker(r.text);
+
     ss[i]->SetResult(r);
   }
 }
