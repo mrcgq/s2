@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "kaldi-native-fbank/csrc/online-feature.h"
+#include "sherpa-onnx/csrc/dsp-radar.h"  // [Version 31] 声学雷达数学中枢
 #include "sherpa-onnx/csrc/macros.h"
 #include "sherpa-onnx/csrc/math.h"
 #include "sherpa-onnx/csrc/offline-recognizer.h"
@@ -83,21 +84,12 @@ class OfflineStream::Impl {
 
     if (tag.align_to_stft_center) {
       whisper_align_to_stft_center_ = true;
-      // The whisper feature computer uses a 10 ms frame shift; prepending
-      // half a shift of silence moves each kaldi-placed window midpoint
-      // from i * shift + shift / 2 back to i * shift, the centered-STFT
-      // convention. GetFrames() drops the one extra trailing frame this
-      // produces, so the frame count matches floor(num_samples / shift)
-      // exactly as the reference extractor computes it.
       whisper_center_padding_ =
           static_cast<int32_t>(opts_.frame_opts.samp_freq * 0.01f) / 2;
     }
   }
 
   explicit Impl(CEDTag /*tag*/) : is_ced_(true) {
-    // see
-    // https://github.com/RicherMans/CED/blob/main/onnx_inference_with_kaldi.py
-
     opts_.frame_opts.frame_length_ms = 32;
     opts_.frame_opts.dither = 0;
     opts_.frame_opts.preemph_coeff = 0;
@@ -155,6 +147,9 @@ class OfflineStream::Impl {
       std::vector<float> samples;
       resampler->Resample(waveform, n, true, &samples);
 
+      // ──【Version 31 声学雷达注入点 A：重采样后黄金声谱净化】──
+      ApplyAcousticRadar(samples.data(), samples.size(), config_.sampling_rate);
+
       if (is_moonshine_ || is_omnilingual_asr_) {
         samples_.insert(samples_.end(), samples.begin(), samples.end());
       } else if (fbank_) {
@@ -172,25 +167,25 @@ class OfflineStream::Impl {
       return;
     }  // if (sampling_rate != config_.sampling_rate)
 
+    // ──【Version 31 声学雷达注入点 B：原生采样率原地声学雷达处理】──
+    std::vector<float> enhanced_buf(waveform, waveform + n);
+    ApplyAcousticRadar(enhanced_buf.data(), n, sampling_rate);
+
     if (is_moonshine_ || is_omnilingual_asr_) {
-      samples_.insert(samples_.end(), waveform, waveform + n);
+      samples_.insert(samples_.end(), enhanced_buf.begin(), enhanced_buf.end());
     } else if (fbank_) {
-      fbank_->AcceptWaveform(sampling_rate, waveform, n);
+      fbank_->AcceptWaveform(sampling_rate, enhanced_buf.data(), n);
       fbank_->InputFinished();
     } else if (mfcc_) {
-      mfcc_->AcceptWaveform(sampling_rate, waveform, n);
+      mfcc_->AcceptWaveform(sampling_rate, enhanced_buf.data(), n);
       mfcc_->InputFinished();
     } else {
-      FeedWhisper(waveform, n);
+      FeedWhisper(enhanced_buf.data(), n);
     }
   }
 
   void FeedWhisper(const float *samples, int32_t n) {
     if (whisper_center_padding_ > 0 && n > 0) {
-      // Reflect-pad the lead-in the way torch.stft(center=True,
-      // pad_mode="reflect") does: sample -i mirrors sample i (the
-      // boundary sample itself is not repeated). A first chunk shorter
-      // than the padding is zero-padded instead.
       int32_t pad = whisper_center_padding_;
       std::vector<float> padded(static_cast<size_t>(pad) + n);
       if (n > pad) {
@@ -201,7 +196,7 @@ class OfflineStream::Impl {
       std::copy(samples, samples + n, padded.begin() + pad);
       whisper_fbank_->AcceptWaveform(config_.sampling_rate, padded.data(),
                                      padded.size());
-      whisper_center_padding_ = 0;  // pad only before the first chunk
+      whisper_center_padding_ = 0;
     } else {
       whisper_fbank_->AcceptWaveform(config_.sampling_rate, samples, n);
     }
@@ -228,9 +223,6 @@ class OfflineStream::Impl {
     assert(n > 0 && "Please first call AcceptWaveform()");
 
     if (whisper_align_to_stft_center_) {
-      // The half-shift lead-in padding yields extra trailing frames
-      // relative to the centered-STFT frame count of
-      // floor(num_samples / frame_shift); keep exactly that many.
       int32_t frame_shift =
           static_cast<int32_t>(opts_.frame_opts.samp_freq * 0.01f);
       int32_t target = static_cast<int32_t>(whisper_num_samples_ / frame_shift);
@@ -303,8 +295,6 @@ class OfflineStream::Impl {
   }
 
  private:
-  // see
-  // https://github.com/pytorch/audio/blob/main/src/torchaudio/functional/functional.py#L359
   void AmplitudeToDB(float *p, int32_t n) const {
     float multiplier = 10;
     float top_db = 120;
@@ -523,7 +513,6 @@ std::string OfflineRecognitionResult::AsJsonString() const {
   }
   os << "]";
 
-  // Add segment-level data if present (from Whisper timestamp token mode)
   if (!segment_timestamps.empty()) {
     os << ", ";
 
