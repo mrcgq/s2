@@ -1,8 +1,4 @@
 // sherpa-onnx/csrc/dsp-radar.h
-//
-// Stage-1 & Stage-2 Acoustic Radar & Entropy Breaker (Version 31 God-Tier)
-// Pure C++17 Implementation - Carmack Style Zero-Allocation
-
 #ifndef SHERPA_ONNX_CSRC_DSP_RADAR_H_
 #define SHERPA_ONNX_CSRC_DSP_RADAR_H_
 
@@ -11,18 +7,15 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <algorithm>
 
 namespace sherpa_onnx {
 
-// ══════════════════════════════════════════════════════════════════════════════
-// §1 前哨：双二阶 IIR 差分滤波器 (Biquad Filter)
-// ══════════════════════════════════════════════════════════════════════════════
 class BiquadFilter {
  public:
   BiquadFilter() = default;
 
-  // 80Hz 高通滤波器 (High-Pass Filter, Q=0.707)
   static BiquadFilter CreateHighPass(float sample_rate, float cutoff_hz = 80.0f, float q = 0.707f) {
     BiquadFilter f;
     float w0 = 2.0f * M_PI * cutoff_hz / sample_rate;
@@ -41,7 +34,6 @@ class BiquadFilter {
     return f;
   }
 
-  // 3000Hz 峰值均衡器 (Peaking EQ, +8dB Gain, Q=1.2)
   static BiquadFilter CreatePeakingEQ(float sample_rate, float center_hz = 3000.0f, float gain_db = 8.0f, float q = 1.2f) {
     BiquadFilter f;
     float w0 = 2.0f * M_PI * center_hz / sample_rate;
@@ -76,43 +68,30 @@ class BiquadFilter {
   float x1_ = 0.0f, x2_ = 0.0f, y1_ = 0.0f, y2_ = 0.0f;
 };
 
-// ══════════════════════════════════════════════════════════════════════════════
-// §2 对数动态弱声抽吸器 (Log-Compand Exciter)
-// ══════════════════════════════════════════════════════════════════════════════
 inline float SoftCompandSample(float x) {
   if (std::abs(x) < 1e-6f) return x;
   float sign = (x > 0.0f) ? 1.0f : -1.0f;
   float mag = std::abs(x);
-
-  // 针对 [-45dB, -15dB] 弱微耳语区进行对数级激化放大
   float boosted = std::pow(mag, 0.72f) * 2.0f;
-
-  // Soft-Knee 软顶防破限幅 (tanh limiter)
   if (boosted > 0.95f) {
     boosted = 0.95f + 0.05f * std::tanh((boosted - 0.95f) / 0.05f);
   }
   return sign * boosted;
 }
 
-// 统一声学雷达处理流水线 (原地在内存数组执行，耗时 < 0.05ms)
 inline void ApplyAcousticRadar(float *samples, int32_t n, int32_t sample_rate = 16000) {
   if (!samples || n <= 0) return;
-
   auto hpf = BiquadFilter::CreateHighPass(static_cast<float>(sample_rate), 80.0f, 0.707f);
   auto eq = BiquadFilter::CreatePeakingEQ(static_cast<float>(sample_rate), 3000.0f, 8.0f, 1.2f);
-
   for (int32_t i = 0; i < n; ++i) {
     float s = samples[i];
-    s = hpf.Process(s);          // 1. 80Hz 高通
-    s = eq.Process(s);           // 2. 3kHz 辅音激化
-    s = SoftCompandSample(s);    // 3. 动态弱声抽吸
+    s = hpf.Process(s);
+    s = eq.Process(s);
+    s = SoftCompandSample(s);
     samples[i] = s;
   }
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// §3 后卫：UTF-8 香农熵计算与死循环拦截断路器
-// ══════════════════════════════════════════════════════════════════════════════
 inline std::vector<uint32_t> DecodeUtf8ToCodepoints(const std::string &str) {
   std::vector<uint32_t> out;
   size_t i = 0;
@@ -130,7 +109,6 @@ inline std::vector<uint32_t> DecodeUtf8ToCodepoints(const std::string &str) {
     for (size_t j = 1; j < len; ++j) {
       cp = (cp << 6) | (static_cast<uint8_t>(str[i + j]) & 0x3F);
     }
-    // 忽略空白与常见符号，只保留文字
     if (cp > 0x20 && cp != 0x3000 && cp != 0x3001 && cp != 0x3002) {
       out.push_back(cp);
     }
@@ -152,22 +130,18 @@ inline float CalcShannonEntropy(const std::vector<uint32_t> &cps) {
   return ent;
 }
 
-// 熔断过滤：处决模型复读幻觉
 inline std::string ApplyEntropyAndLoopBreaker(const std::string &raw_text) {
   if (raw_text.empty()) return raw_text;
-
   auto cps = DecodeUtf8ToCodepoints(raw_text);
   if (cps.size() >= 8) {
     float entropy = CalcShannonEntropy(cps);
-    std::unordered_map<uint32_t, int32_t> uniq(cps.begin(), cps.end());
+    std::unordered_set<uint32_t> uniq(cps.begin(), cps.end());
     float div_ratio = static_cast<float>(uniq.size()) / cps.size();
 
-    // 1. 低熵熔断：字数多但熵极低，判定为死循环幻觉
     if (entropy < 1.30f || div_ratio < 0.20f) {
       return "[Low-Entropy Hallucination Suppressed]";
     }
 
-    // 2. 连续 3 连 N-Gram 重复模式检测 (如 "去去去", "你好你好你好")
     for (size_t n = 1; n <= 4; ++n) {
       if (cps.size() < n * 3) continue;
       for (size_t i = 0; i + n * 3 <= cps.size(); ++i) {
@@ -179,7 +153,6 @@ inline std::string ApplyEntropyAndLoopBreaker(const std::string &raw_text) {
           }
         }
         if (match) {
-          // 发现死循环，直接熔断截停
           return raw_text.substr(0, raw_text.size() / 2);
         }
       }
@@ -189,5 +162,4 @@ inline std::string ApplyEntropyAndLoopBreaker(const std::string &raw_text) {
 }
 
 }  // namespace sherpa_onnx
-
 #endif  // SHERPA_ONNX_CSRC_DSP_RADAR_H_
