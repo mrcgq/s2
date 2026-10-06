@@ -1,82 +1,242 @@
-<html lang="en">
-
+<!DOCTYPE html>
+<html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width" />
-  <title>Next-gen Kaldi WebAssembly with sherpa-onnx for ASR</title>
-  <style>
-    h1,div {
-      text-align: center;
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sherpa-ONNX 极速离线语音识别 (神级自愈完全体)</title>
+<style>
+  :root {
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --bg: #f8fafc;
+    --card: #ffffff;
+    --text: #0f172a;
+    --text-muted: #64748b;
+    --border: #cbd5e1;
+    --success: #16a34a;
+    --warning: #d97706;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { 
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+    max-width: 920px; 
+    margin: 30px auto; 
+    padding: 0 20px; 
+    background: var(--bg); 
+    color: var(--text); 
+  }
+  h1 { text-align: center; color: #0f172a; margin-bottom: 6px; font-size: 26px; font-weight: 800; }
+  .badge { text-align: center; font-size: 13px; color: var(--text-muted); margin-bottom: 20px; }
+  .box { 
+    background: var(--card); 
+    border-radius: 14px; 
+    padding: 28px; 
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05); 
+    border: 1px solid #e2e8f0;
+  }
+  
+  .status-banner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 20px;
+    background: #fef3c7;
+    color: var(--warning);
+    border: 1px solid #fde68a;
+    transition: all 0.3s ease;
+  }
+  .status-banner.ready {
+    background: #dcfce7;
+    color: var(--success);
+    border-color: #bbf7d0;
+  }
+
+  .btn-group { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+  button { 
+    padding: 10px 18px; 
+    font-size: 14px; 
+    font-weight: 600; 
+    border-radius: 8px; 
+    border: none; 
+    cursor: pointer; 
+    transition: all 0.2s; 
+  }
+  #startBtn { background: var(--primary); color: white; }
+  #startBtn:hover:not(:disabled) { background: var(--primary-hover); }
+  #stopBtn { background: #ef4444; color: white; }
+  #stopBtn:disabled, #startBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+  #clearBtn { background: #e2e8f0; color: #334155; }
+  #clearBtn:hover { background: #cbd5e1; }
+
+  .file-drop { 
+    border: 2px dashed #93c5fd; 
+    border-radius: 10px; 
+    padding: 24px; 
+    text-align: center; 
+    cursor: pointer; 
+    background: #eff6ff; 
+    margin-bottom: 20px; 
+    transition: all 0.2s; 
+  }
+  .file-drop:hover, .file-drop.dragover { border-color: var(--primary); background: #dbeafe; }
+  
+  .progress-card {
+    display: none;
+    background: #f8fafc;
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    border: 1px solid var(--border);
+  }
+  .progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    color: #1e293b;
+  }
+  .progress-bar-bg {
+    width: 100%;
+    height: 10px;
+    background: #e2e8f0;
+    border-radius: 5px;
+    overflow: hidden;
+    margin-bottom: 12px;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #3b82f6, #10b981);
+    transition: width 0.08s linear;
+  }
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 8px;
+    font-size: 13px;
+    color: #475569;
+    background: #ffffff;
+    padding: 10px 14px;
+    border-radius: 6px;
+    border: 1px solid #e2e8f0;
+  }
+  .metrics-grid div b { color: #0f172a; }
+
+  textarea { 
+    width: 100%; 
+    height: 360px; 
+    padding: 16px; 
+    border-radius: 10px; 
+    border: 1px solid var(--border); 
+    font-size: 15px; 
+    line-height: 1.7; 
+    box-sizing: border-box; 
+    resize: vertical; 
+    outline: none; 
+    font-family: inherit; 
+    background: #f8fafc;
+    color: #1e293b;
+  }
+  textarea:focus { border-color: var(--primary); background: #ffffff; }
+
+  #status { font-size: 14px; color: #059669; margin-top: 14px; min-height: 22px; font-weight: 600; }
+  
+  .final-badge {
+    display: none;
+    margin-top: 15px;
+    padding: 12px 16px;
+    background: #dcfce7;
+    color: #15803d;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    border: 1px solid #bbf7d0;
+  }
+</style>
+
+<script>
+// 全浏览器通用生命周期钩子（解决 360/星愿/Safari 状态撕裂与未初始化报错）
+window.Module = window.Module || {};
+window.isDataPackageLoaded = false;
+window.isWasmRuntimeInited = false;
+
+Module.locateFile = function(path, scriptDirectory = '') {
+  return scriptDirectory + path;
+};
+
+Module.setStatus = function(status) {
+  console.log("⚡ [Emscripten Status]", status);
+  if (status === '' || status === 'Running...') {
+    window.isDataPackageLoaded = true;
+    if (typeof window.checkAndInitEngine === 'function') {
+      window.checkAndInitEngine();
     }
-    textarea {
-      width:100%;
-    }
-    .loading {
-      display: none !important;
-    }
-  </style>
+  }
+};
+
+Module.onRuntimeInitialized = function() {
+  console.log("⚡ [Emscripten WASM] 核心运行时已链接");
+  window.isWasmRuntimeInited = true;
+  if (typeof window.checkAndInitEngine === 'function') {
+    window.checkAndInitEngine();
+  }
+};
+</script>
+<script src="sherpa-onnx-wasm-main-asr.js"></script>
+<script src="sherpa-onnx-asr.js"></script>
 </head>
+<body>
 
-<body style="font-family: 'Source Sans Pro', sans-serif; background-color: #f9fafb; color: #333; display: flex; flex-direction: column; align-items: center; height: 100vh; margin: 0;">
-  <h1>
-    Next-gen Kaldi + WebAssembly<br/>
-    ASR Demo with <a href="https://github.com/k2-fsa/sherpa-onnx">sherpa-onnx</a><br/>
-    (with Zipformer)
-  </h1>
+<h1>Sherpa-ONNX 极速离线语音识别</h1>
+<div class="badge">🔥 动态大步长切片推演 + 3kHz 物理弱声雷达 | 100% 浏览器本地离线计算</div>
 
-  <div style="width: 100%; max-width: 900px; background: #fff; padding: 1.5rem; border-radius: 8px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); flex: 1;">
-    <div id="status">Loading...</div>
+<div class="box">
+  <div id="statusBanner" class="status-banner">
+    <span>🔄 正在载入 AI 语音模型数据包 (194MB)...</span>
+  </div>
 
-    <div id="singleAudioContent" class="tab-content loading">
-      <div style="display: flex; gap: 1.5rem;">
-        <div style="flex: 1; display: flex; flex-direction: row; align-items: center; gap: 1rem;">
-          <button id="startBtn" disabled>Start</button>
-          <button id="stopBtn" disabled>Stop</button>
-          <button id="clearBtn">Clear</button>
-        </div>
-      </div>
+  <div class="btn-group">
+    <button id="startBtn" disabled>🎤 开启麦克风实时识别</button>
+    <button id="stopBtn" disabled>⏹️ 停止录音</button>
+    <button id="clearBtn">🗑️ 清空内容</button>
+  </div>
 
-      <div style="flex: 1; display: flex; flex-direction: column; gap: 1rem;">
-          <div style="font-size: 1rem; font-weight: bold; padding: 0.5rem 1rem; background-color: #f8f9fa; border-radius: 8px; color: #6c757d;">Transcript</div>
-          <textarea id="results" rows="10" placeholder="Output will appear here..." readonly style="flex: 1; padding: 0.75rem; font-size: 1rem; border: 1px solid #ced4da; border-radius: 8px; resize: none; background-color: #f8f9fa;"></textarea>
-      </div>
+  <div class="file-drop" id="dropZone" onclick="document.getElementById('fileInput').click()">
+    📂 <b style="font-size: 15px; color: #1d4ed8;">点击选择 或 拖拽 MP3 / WAV / M4A / FLAC 音频文件</b>
+    <div style="font-size: 12px; color: #64748b; margin-top: 4px;">支持 1~3 小时超长音频连续转录 | 纯物理零崩溃 | 真实最高速直出</div>
+    <input type="file" id="fileInput" accept="audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg" style="display: none;">
+  </div>
+
+  <!-- 遥测仪表盘 -->
+  <div id="progressCard" class="progress-card">
+    <div class="progress-header">
+      <span id="speedIndicator">⚡ 正在极速推演中...</span>
+      <span id="progressPercentage" style="color: var(--primary); font-size: 15px;">0.0%</span>
     </div>
-
-    <section flex="1" overflow="auto" id="sound-clips">
-    </section>
-
+    <div class="progress-bar-bg">
+      <div id="progressBar" class="progress-bar-fill"></div>
+    </div>
+    <div class="metrics-grid">
+      <div>⏱️ 音频原时长: <b id="originalDurationText">--:--:--</b></div>
+      <div>⏳ 当前进度: <b id="currentPositionText">00:00:00</b></div>
+      <div>🚀 纯推理速度: <b id="rtfText">0.0x 超实时</b></div>
+      <div>⌛ 纯推演耗时: <b id="elapsedTimeText">0.0 秒</b></div>
+    </div>
   </div>
 
-  <!-- Footer Section -->
-  <div style="width: 100%; max-width: 900px; margin-top: 1.5rem; background: #fff; padding: 1.5rem; border-radius: 8px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); text-align: left; font-size: 0.9rem; color: #6c757d;">
-    <h3>Description</h3>
-    <ul>
-      <li>Everything is <strong>open-sourced.</strong> <a href="https://github.com/k2-fsa/sherpa-onnx">code</a></li>
-      <li>If you have any issues, please either <a href="https://github.com/k2-fsa/sherpa-onnx/issues">file a ticket</a> or contact us via</li>
-        <ul>
-          <li><a href="https://k2-fsa.github.io/sherpa/social-groups.html#wechat">WeChat group</a></li>
-          <li><a href="https://k2-fsa.github.io/sherpa/social-groups.html#qq">QQ group</a></li>
-          <li><a href="https://k2-fsa.github.io/sherpa/social-groups.html#bilibili-b">Bilibili</a></li>
-        </ul>
-    </ul>
-    <h3>About This Demo</h3>
-    <ul>
-      <li><strong>Private and Secure:</strong> All processing is done locally on your device (CPU) within your browser with a single thread. No server is involved, ensuring privacy and security. You can disconnect from the Internet once this page is loaded.</li>
-      <li><strong>Efficient Resource Usage:</strong> No GPU is required, leaving system resources available for webLLM analysis.</li>
-    </ul>
-    <h3>Latest Update</h3>
-    <ul>
-      <li>Update UI.</li>
-      <li>First working version.</li>
-    </ul>
+  <textarea id="transcript" placeholder="转录文字将逐句实时同步呈现在这里..."></textarea>
+  
+  <div id="status">⏳ 正在等待引擎就绪...</div>
+  <div id="finalBadge" class="final-badge"></div>
+</div>
 
-    <h3>Acknowledgement</h3>
-    <ul>
-      <li>We refer to <a href="https://huggingface.co/spaces/Banafo/Kroko-Streaming-ASR-Wasm">https://huggingface.co/spaces/Banafo/Kroko-Streaming-ASR-Wasm</a> for the UI part.</li>
-    </ul>
-  </div>
-
-  <script src="sherpa-onnx-asr.js"></script>
-  <script src="app-asr.js"></script>
-  <script src="sherpa-onnx-wasm-main-asr.js"></script>
+<script src="app-asr.js?v=20261006_definitive_v31"></script>
 </body>
+</html>
